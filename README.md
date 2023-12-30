@@ -5,24 +5,12 @@ for the following two weeks, and sends a telegram notification regarding new ava
 
 This is a Copilot-assisted Rust rewrite of a similar C# project.
 
-## Table of Contents
-
-- [Installation](#installation)
-- [Usage](#usage)
-- [Contributing](#contributing)
-- [License](#license)
-
 ## Installation
 
-Instructions on how to install and set up the project.
-
-## Usage
-
-Instructions on how to use the project and any relevant examples.
-
-## Contributing
-
-Guidelines for contributing to the project and how to submit pull requests.
+1. Create a telegram bot with [BotFather](https://telegram.me/BotFather).
+2. Set the environment variable TELEGRAM_BOT_TOKEN to your own bot token.
+3. Set the environment variable TELEGRAM_CHAT_ID to your own chat id.
+4. Compile and run the program.
 
 ## License
 

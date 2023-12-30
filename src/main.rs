@@ -1,8 +1,9 @@
-use std::fs::File;
+use std::fs::OpenOptions;
+use std::string;
 use std::thread;
 use std::time::Duration;
-use chrono::Utc;
-use std::io::prelude::*;
+use chrono::{DateTime, Local};
+use std::io::{prelude::*, SeekFrom};
 
 fn main() {
     // Check if TELEGRAM_BOT_TOKEN environment variable is set
@@ -25,159 +26,226 @@ fn main() {
 }
 
 fn fetch_data() {
-    // Fetch data from API
+    println!("Fetching data...");
     let api_data = fetch_api_data();
 
-    // Read existing data from JSON file. If the file does not exist, create a new empty file.
-    // Check if file exists
-    if !std::path::Path::new("data.json").exists() {
-        // Create new empty file
-        let mut file = File::create("data.json").expect("Failed to create file");
-        file.write_all("{}".as_bytes()).expect("Failed to write to file");
+    let opening_times = parse_opening_times(&api_data);
+    let reservations = parse_reservations(&api_data);
+    let available_times = get_available_times(&opening_times, &reservations);
+
+    println!("Available times:");
+    for time in &available_times {
+        println!("{}", time);
     }
 
-    let mut file = File::open("data.json").expect("Failed to open file");
-    let mut json_data = String::new();
-    file.read_to_string(&mut json_data).expect("Failed to read file");
+    // Read existing data from a txt file called available_times.csv. If the file does not exist, create a new empty file.
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open("available_times.csv")
+        .unwrap();
 
-    // Parse JSON data. If the file is empty or parsing fails, create a new empty JSON object.
-    let existing_data: serde_json::Value = match serde_json::from_str(&json_data) {
-        Ok(data) => data,
-        Err(_) => serde_json::from_str("{}").expect("Failed to parse JSON")
-    };
-    
-    // Find new available times
-    let new_times = find_new_times(&api_data, &existing_data);
-
-    // Output new times to console
-    for time in &new_times {
-        println!("New available time: {}", time);
+    // Read existing available times from file.
+    let mut existing_available_times: Vec<Timeslot> = Vec::new();
+    // If the file is empty, do nothing.
+    if file.metadata().unwrap().len() != 0 {
+        // read file contents to string array
+        let mut file_contents = String::new();
+        file.read_to_string(&mut file_contents).expect("Failed to read file");
+        // split string array by newlines
+        let file_lines = file_contents.split("\n");
+        // parse each line as a Timeslot and add it to existing_available_times
+        // The lines are in the following format:
+        // 2021-09-01T10:00:00+03:00,2021-09-01T11:00:00+03:00
+        for line in file_lines {
+            if line == "" {
+                continue;
+            }
+            let timeslot = Timeslot {
+                start: line.split(",").collect::<Vec<&str>>()[0].to_owned(),
+                end: line.split(",").collect::<Vec<&str>>()[1].to_owned(),
+            };
+            existing_available_times.push(timeslot);
+        }
     }
 
-    // Update JSON file with reservations table from API data. Skip other data in the json.
-    let updated_data = &api_data["reservations"];
-    let mut file = File::create("data.json").expect("Failed to create file");
-    file.write_all(updated_data.to_string().as_bytes()).expect("Failed to write to file");
+    // Compare existing available times with new available times.
+    // If there are new available times, send a telegram message.
+    let mut new_times: Vec<Timeslot> = Vec::new();
+    for time in &available_times {
+        let mut is_new = true;
+        for existing_time in &existing_available_times {
+            if time.start == existing_time.start && time.end == existing_time.end {
+                is_new = false;
+                break;
+            }
+        }
+        if is_new {
+            new_times.push(time.clone());
+        }
+    }
+
+    // Write available times to file.
+    // Replace existing file contents.
+    file.set_len(0).expect("Failed to truncate file");
+    file.seek(SeekFrom::Start(0)).unwrap();
+    for time in &available_times {
+        file.write_all(format!("{},{}\n", time.start, time.end).as_bytes()).expect("Failed to write to file");
+    }
 
     // Send telegram message with new times
     send_telegram_message(&new_times);
 }
 
+
+/// Make an API request to api.hel.fi/respa and return response as a JSON object.
+///
+/// # Panics
+///
+/// Panics if the API request fails or if the JSON parsing fails.
 fn fetch_api_data() -> serde_json::Value {
-    // Fetch data from API and return as string
-    let current_time = Utc::now();
-    let end_date = current_time + chrono::Duration::days(14);
+    let current_time = Local::now();
+    let end_date = current_time + chrono::Duration::days(30);
     let request_url = format!("https://api.hel.fi/respa/v1/resource/axwzr3i57yba/?start={}&end={}&format=json", current_time, end_date);
 
-    // Make API request and return response as a JSON object
     let api_response = reqwest::blocking::get(&request_url).expect("Failed to fetch API data").text().unwrap();
     let api_data: serde_json::Value = serde_json::from_str(&api_response).expect("Failed to parse JSON");
     api_data
 }
 
-fn find_new_times(api_data: &serde_json::Value, existing_data: &serde_json::Value) -> Vec<String> {
-    // Compare API data with existing data and find new available times.
-    // If existing data is empty, return all available times.
 
-// The input from API data looks something like this:
-// {
-//     "opening_hours": [
-//         {
-//             "date": "2023-12-01",
-//             "opens": "2023-12-01T10:00:00+02:00",
-//             "closes": "2023-12-01T14:00:00+02:00"
-//         },
-//         {
-//             "date": "2023-12-02",
-//             "opens": "2023-12-02T16:00:00+02:00",
-//             "closes": "2023-12-02T19:00:00+02:00"
-//         },
-//         {
-//             "date": "2024-01-01",
-//             "opens": null,
-//             "closes": null
-//         }
-//     ],
-//     "reservations": [
-//         {
-//             "begin": "2023-12-01T10:00:00+02:00",
-//             "end": "2023-12-01T11:00:00+02:00",
-//         },
-//         {
-//             "begin": "2023-12-01T11:00:00+02:00",
-//             "end": "2023-12-01T14:00:00+02:00",
-//         }
-//     ]
-// }
-    
-        // Get opening hours from API data
-        let opening_hours = api_data["opening_hours"].as_array().unwrap();
-    
-        // Get reservations from API data
-        let reservations = api_data["reservations"].as_array().unwrap();
-    
-        // Get existing reservations from existing data. If existing data is empty, create an empty Vec<Value>.
-        let binding = Vec::new();
-        let existing_reservations = existing_data["reservations"].as_array().unwrap_or(&binding);
-    
-        // Create vector for new available times
-        let mut new_times: Vec<String> = Vec::new();
-    
-        // Loop through opening hours
-        for opening_hour in opening_hours {
-            // Get date from opening hour
-            let date = &opening_hour["date"].as_str().unwrap();
-    
-            // Get opens from opening hour. If opens is null, continue to next opening hour.
-            let opens = &opening_hour["opens"];
-            if opens.is_null() {
-                continue;
-            }
-
-            // Get closes from opening hour. If closes is null, skip this opening hour.
-            let closes = &opening_hour["closes"];
-            if closes.is_null() {
-                continue;
-            }
-
-            // Loop through reservations
-            for reservation in reservations {
-                // Get begin from reservation
-                let begin = reservation["begin"].as_str().unwrap();
-    
-                // Get end from reservation
-                let end = reservation["end"].as_str().unwrap();
-    
-                // Check if reservation is on the same date as opening hour
-                if begin.starts_with(date) && end.starts_with(date) {
-                    // Check if reservation is not in existing reservations
-                    if !existing_reservations.contains(&reservation) {
-                        // Add reservation to new available times.
-                        // The format should look like this:
-                        // 2024-01-01: 10:00 - 11:00 (1h)
-                        // 2023-01-02: 11:00 - 14:00 (3h)
-                        let begin_time = begin.split("T").collect::<Vec<&str>>()[1].split("+").collect::<Vec<&str>>()[0];
-                        let end_time = end.split("T").collect::<Vec<&str>>()[1].split("+").collect::<Vec<&str>>()[0];
-                        let duration = chrono::DateTime::parse_from_rfc3339(end).unwrap() - chrono::DateTime::parse_from_rfc3339(begin).unwrap();
-                        let duration = duration.num_hours();
-
-                        let begin_time_without_seconds = begin_time.chars().take(begin_time.len() - 3).collect::<String>();
-                        let end_time_without_seconds = end_time.chars().take(end_time.len() - 3).collect::<String>();
-                        let new_time = format!("{}: {} - {} ({}h)", date, begin_time_without_seconds, end_time_without_seconds, duration);
-                        new_times.push(new_time);
-                    }
-                }
-            }
+/// Parse all opening times from API data. Return a vector of Timeslot structs.
+///
+/// # Panics
+///
+/// Panics if the JSON parsing fails.
+fn parse_opening_times(api_data: &serde_json::Value) -> Vec<Timeslot> {   
+    // Get opening hours from API data
+    let opening_hours = api_data["opening_hours"].as_array().unwrap();
+        
+    // Create a Vec<Timeslot> from opening hours
+    let mut opening_times: Vec<Timeslot> = Vec::new();
+    for opening_hour in opening_hours {
+        // Skip opening hours that are null
+        if opening_hour["opens"].is_null() || opening_hour["closes"].is_null() {
+            continue;
         }
-    
-        // Return new available times
-        new_times
+
+        // Create Timeslot from opening hour
+        let timeslot = Timeslot { 
+            start: opening_hour["opens"].as_str().unwrap().to_owned(), 
+            end: opening_hour["closes"].as_str().unwrap().to_owned() 
+        };
+
+        // Add Timeslot to opening times
+        opening_times.push(timeslot);
+    }
+
+    return opening_times;
 }
 
-fn send_telegram_message(new_times: &[String]) {
+/// Parse all reservations times from API data. Return a vector of Timeslot structs.
+///
+/// # Panics
+///
+/// Panics if the JSON parsing fails.
+fn parse_reservations(api_data: &serde_json::Value) -> Vec<Timeslot> {
+    // Get reservations from API data
+    let reservations = api_data["reservations"].as_array().unwrap();
+
+    // Create a Vec<Timeslot> from reservations
+    let mut reservation_times: Vec<Timeslot> = Vec::new();
+    for reservation in reservations {
+        // Skip reservations that are null
+        if reservation["begin"].is_null() || reservation["end"].is_null() {
+            continue;
+        }
+
+        // Create Timeslot from reservation
+        let timeslot = Timeslot { 
+            start: reservation["begin"].as_str().unwrap().to_owned(), 
+            end: reservation["end"].as_str().unwrap().to_owned() 
+        };
+
+        // Add Timeslot to reservation times
+        reservation_times.push(timeslot);
+    }
+
+    return reservation_times;
+}
+
+
+fn get_available_times(opening_times: &Vec<Timeslot>, reservations: &Vec<Timeslot>) -> Vec<Timeslot> {
+    // Iterate over each hour in opening times.
+    // If the hour is not in reservations, add it to available times.
+    let mut available_times: Vec<Timeslot> = Vec::new();
+    for opening_time in opening_times {
+        // Get start and end time of opening time
+        let start_time = opening_time.start_time();
+        let end_time = opening_time.end_time();
+
+        // Iterate over each hour in opening time
+        let mut current_time = start_time;
+        while current_time < end_time {
+            // Check if current time is in reservations
+            let mut is_reserved = false;
+            for reservation in reservations {
+                if current_time >= reservation.start_time() && current_time < reservation.end_time() {
+                    is_reserved = true;
+                    break;
+                }
+            }
+
+            // If current time is not in reservations, add it to available times
+            if !is_reserved {
+                let timeslot = Timeslot { 
+                    start: current_time.to_rfc3339(),
+                    end: (current_time + chrono::Duration::hours(1)).to_rfc3339(),
+                };
+                available_times.push(timeslot);
+            }
+
+            // Increment current time by 1 hour
+            current_time = current_time + chrono::Duration::hours(1);
+        }
+    }
+
+    // Combine 1 hour timeslots into longer timeslots.
+    let mut combined_timeslots: Vec<Timeslot> = Vec::new();
+    let mut current_timeslot: Option<Timeslot> = None;
+
+    for timeslot in available_times {
+        if let Some(current) = current_timeslot {
+            if current.end_time() == timeslot.start_time() {
+                // Extend the current timeslot
+                current_timeslot = Some(Timeslot {
+                    start: current.start,
+                    end: timeslot.end,
+                });
+            } else {
+                // Add the current timeslot to the combined timeslots
+                combined_timeslots.push(current);
+                current_timeslot = Some(timeslot);
+            }
+        } else {
+            current_timeslot = Some(timeslot);
+        }
+    }
+
+    // Add the last timeslot to the combined timeslots
+    if let Some(current) = current_timeslot {
+        combined_timeslots.push(current);
+    }
+
+    return combined_timeslots;
+}
+
+fn send_telegram_message(new_times: &Vec<Timeslot>) {
     // Send telegram message with new available times
     // If there are no new available times, do nothing.
     if new_times.len() == 0 {
+        println!("No new available times");
         return;
     }
 
@@ -198,4 +266,46 @@ fn send_telegram_message(new_times: &[String]) {
     let url = format!("https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}", bot_token, chat_id, message);
     let response = reqwest::blocking::get(&url).expect("Failed to send message");
     println!("Telegram response: {}", response.text().unwrap());
+}
+
+// Generate a struct that contains a timeslot definition.
+// It should contain the following:
+// - start time
+// - end time
+// implement a function that returns the duration of the timeslot in hours
+// implement a function that prints the timeslot in the following format:
+// "2023-12-01 10:00 - 11:00 (1 h)"
+// implement serde::Serialize for the struct
+// implement serde::Deserialize for the struct
+
+
+#[derive(Clone)]
+struct Timeslot {
+    start: string::String,
+    end: string::String,
+}
+
+impl Timeslot {
+    fn duration(&self) -> i64 {
+        let duration = self.end_time() - self.start_time();
+        duration.num_hours()
+    }
+
+    fn start_time(&self) -> DateTime<Local> {
+        let start_time = DateTime::parse_from_rfc3339(&self.start).unwrap().with_timezone(&Local);
+        start_time
+    }
+
+    fn end_time(&self) -> DateTime<Local> {
+        let end_time = DateTime::parse_from_rfc3339(&self.end).unwrap().with_timezone(&Local);
+        end_time
+    }
+}
+
+impl std::fmt::Display for Timeslot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Example output:
+        // "2023-12-01 10:00 - 11:00 (1 h)"
+        write!(f, "{} - {} ({} h)", self.start_time().format("%Y-%m-%d %H:%M"), self.end_time().format("%H:%M"), self.duration())
+    }
 }
