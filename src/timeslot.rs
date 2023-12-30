@@ -28,6 +28,12 @@ impl Timeslot {
     }
 }
 
+impl std::cmp::PartialEq for Timeslot {
+    fn eq(&self, other: &Self) -> bool {
+        self.start == other.start && self.end == other.end
+    }
+}
+
 impl std::fmt::Display for Timeslot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Example output:
