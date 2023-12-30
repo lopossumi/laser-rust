@@ -1,9 +1,11 @@
 use std::fs::OpenOptions;
-use std::string;
 use std::thread;
 use std::time::Duration;
-use chrono::{DateTime, Local};
+use chrono::{Local, Days};
 use std::io::{prelude::*, SeekFrom};
+
+mod timeslot;
+use timeslot::Timeslot;
 
 fn main() {
     // Check if TELEGRAM_BOT_TOKEN environment variable is set
@@ -30,8 +32,20 @@ fn fetch_data() {
     let api_data = fetch_api_data();
 
     let opening_times = parse_opening_times(&api_data);
+
+    println!("Opening times:");
+    for time in &opening_times {
+        println!("{}", time);
+    }
+
     let reservations = parse_reservations(&api_data);
-    let available_times = get_available_times(&opening_times, &reservations);
+
+    println!("Reservations:");
+    for time in &reservations {
+        println!("{}", time);
+    }
+
+    let available_times = timeslot::get_available_times(&opening_times, &reservations);
 
     println!("Available times:");
     for time in &available_times {
@@ -106,8 +120,15 @@ fn fetch_data() {
 /// Panics if the API request fails or if the JSON parsing fails.
 fn fetch_api_data() -> serde_json::Value {
     let current_time = Local::now();
-    let end_date = current_time + chrono::Duration::days(30);
-    let request_url = format!("https://api.hel.fi/respa/v1/resource/axwzr3i57yba/?start={}&end={}&format=json", current_time, end_date);
+    let start_date = current_time.format("%Y-%m-%d").to_string();
+    let end_date = (current_time.checked_add_days(Days::new(14))).unwrap().format("%Y-%m-%d").to_string();
+
+    // Append "T23:59:59" to end_date  to get all reservations for the day
+    let end_date = format!("{}T23:59:59", end_date);
+
+    let request_url = format!("https://api.hel.fi/respa/v1/resource/axwzr3i57yba/?start={}&end={}&format=json", start_date, end_date);
+
+    println!("Request URL: {}", request_url);
 
     let api_response = reqwest::blocking::get(&request_url).expect("Failed to fetch API data").text().unwrap();
     let api_data: serde_json::Value = serde_json::from_str(&api_response).expect("Failed to parse JSON");
@@ -116,13 +137,11 @@ fn fetch_api_data() -> serde_json::Value {
 
 
 /// Parse all opening times from API data. Return a vector of Timeslot structs.
-///
-/// # Panics
-///
-/// Panics if the JSON parsing fails.
+/// Returns an empty vector on error.
 fn parse_opening_times(api_data: &serde_json::Value) -> Vec<Timeslot> {   
-    // Get opening hours from API data
-    let opening_hours = api_data["opening_hours"].as_array().unwrap();
+    // Get opening hours from API data. If opening hours is null, return an empty vector.
+    let binding = Vec::new();
+    let opening_hours = api_data["opening_hours"].as_array().unwrap_or(&binding);
         
     // Create a Vec<Timeslot> from opening hours
     let mut opening_times: Vec<Timeslot> = Vec::new();
@@ -146,13 +165,11 @@ fn parse_opening_times(api_data: &serde_json::Value) -> Vec<Timeslot> {
 }
 
 /// Parse all reservations times from API data. Return a vector of Timeslot structs.
-///
-/// # Panics
-///
-/// Panics if the JSON parsing fails.
+/// Returns an empty vector on error.
 fn parse_reservations(api_data: &serde_json::Value) -> Vec<Timeslot> {
     // Get reservations from API data
-    let reservations = api_data["reservations"].as_array().unwrap();
+    let binding = Vec::new();
+    let reservations = api_data["reservations"].as_array().unwrap_or(&binding);
 
     // Create a Vec<Timeslot> from reservations
     let mut reservation_times: Vec<Timeslot> = Vec::new();
@@ -175,71 +192,6 @@ fn parse_reservations(api_data: &serde_json::Value) -> Vec<Timeslot> {
     return reservation_times;
 }
 
-
-fn get_available_times(opening_times: &Vec<Timeslot>, reservations: &Vec<Timeslot>) -> Vec<Timeslot> {
-    // Iterate over each hour in opening times.
-    // If the hour is not in reservations, add it to available times.
-    let mut available_times: Vec<Timeslot> = Vec::new();
-    for opening_time in opening_times {
-        // Get start and end time of opening time
-        let start_time = opening_time.start_time();
-        let end_time = opening_time.end_time();
-
-        // Iterate over each hour in opening time
-        let mut current_time = start_time;
-        while current_time < end_time {
-            // Check if current time is in reservations
-            let mut is_reserved = false;
-            for reservation in reservations {
-                if current_time >= reservation.start_time() && current_time < reservation.end_time() {
-                    is_reserved = true;
-                    break;
-                }
-            }
-
-            // If current time is not in reservations, add it to available times
-            if !is_reserved {
-                let timeslot = Timeslot { 
-                    start: current_time.to_rfc3339(),
-                    end: (current_time + chrono::Duration::hours(1)).to_rfc3339(),
-                };
-                available_times.push(timeslot);
-            }
-
-            // Increment current time by 1 hour
-            current_time = current_time + chrono::Duration::hours(1);
-        }
-    }
-
-    // Combine 1 hour timeslots into longer timeslots.
-    let mut combined_timeslots: Vec<Timeslot> = Vec::new();
-    let mut current_timeslot: Option<Timeslot> = None;
-
-    for timeslot in available_times {
-        if let Some(current) = current_timeslot {
-            if current.end_time() == timeslot.start_time() {
-                // Extend the current timeslot
-                current_timeslot = Some(Timeslot {
-                    start: current.start,
-                    end: timeslot.end,
-                });
-            } else {
-                // Add the current timeslot to the combined timeslots
-                combined_timeslots.push(current);
-                current_timeslot = Some(timeslot);
-            }
-        } else {
-            current_timeslot = Some(timeslot);
-        }
-    }
-
-    // Add the last timeslot to the combined timeslots
-    if let Some(current) = current_timeslot {
-        combined_timeslots.push(current);
-    }
-
-    return combined_timeslots;
-}
 
 fn send_telegram_message(new_times: &Vec<Timeslot>) {
     // Send telegram message with new available times
@@ -266,46 +218,4 @@ fn send_telegram_message(new_times: &Vec<Timeslot>) {
     let url = format!("https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}", bot_token, chat_id, message);
     let response = reqwest::blocking::get(&url).expect("Failed to send message");
     println!("Telegram response: {}", response.text().unwrap());
-}
-
-// Generate a struct that contains a timeslot definition.
-// It should contain the following:
-// - start time
-// - end time
-// implement a function that returns the duration of the timeslot in hours
-// implement a function that prints the timeslot in the following format:
-// "2023-12-01 10:00 - 11:00 (1 h)"
-// implement serde::Serialize for the struct
-// implement serde::Deserialize for the struct
-
-
-#[derive(Clone)]
-struct Timeslot {
-    start: string::String,
-    end: string::String,
-}
-
-impl Timeslot {
-    fn duration(&self) -> i64 {
-        let duration = self.end_time() - self.start_time();
-        duration.num_hours()
-    }
-
-    fn start_time(&self) -> DateTime<Local> {
-        let start_time = DateTime::parse_from_rfc3339(&self.start).unwrap().with_timezone(&Local);
-        start_time
-    }
-
-    fn end_time(&self) -> DateTime<Local> {
-        let end_time = DateTime::parse_from_rfc3339(&self.end).unwrap().with_timezone(&Local);
-        end_time
-    }
-}
-
-impl std::fmt::Display for Timeslot {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Example output:
-        // "2023-12-01 10:00 - 11:00 (1 h)"
-        write!(f, "{} - {} ({} h)", self.start_time().format("%Y-%m-%d %H:%M"), self.end_time().format("%H:%M"), self.duration())
-    }
 }
