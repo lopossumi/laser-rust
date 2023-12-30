@@ -37,11 +37,12 @@ fn fetch_data() {
     let reservations = parse_reservations(&api_data);
     let available_times = timeslot::get_available_times(&opening_times, &reservations);
 
-    // Read existing data from a txt file called available_times.csv. If the file does not exist, create a new empty file.
+    // Read existing data from a txt file called available_times. If the file does not exist, create a new empty file.
     let mut file = match OpenOptions::new()
         .read(true)
         .write(true)
-        .open("available_times.csv") {
+        .create(true)
+        .open("available_times") {
         Ok(file) => file,
         Err(_) => panic!("Failed to open file")
     };
@@ -59,30 +60,29 @@ fn fetch_data() {
     send_telegram_message(new_times);
 }
 
+
+/// Read existing available times from a file called available_times.
+/// If the file does not exist, return an empty vector.
+///
+/// The lines are in the following format:
+/// 2021-09-01T10:00:00+03:00,2021-09-01T11:00:00+03:00
 fn read_existing_available_times(file: &mut std::fs::File) -> Vec<Timeslot> {
-    // Read existing available times from file.
+    let mut file_contents = String::new();
+    file.read_to_string(&mut file_contents).expect("Failed to read file");
+    let file_lines = file_contents.split("\n");
+    
     let mut existing_available_times: Vec<Timeslot> = Vec::new();
-    // If the file is empty, do nothing.
-    if file.metadata().unwrap().len() != 0 {
-        // read file contents to string array
-        let mut file_contents = String::new();
-        file.read_to_string(&mut file_contents).expect("Failed to read file");
-        // split string array by newlines
-        let file_lines = file_contents.split("\n");
-        // parse each line as a Timeslot and add it to existing_available_times
-        // The lines are in the following format:
-        // 2021-09-01T10:00:00+03:00,2021-09-01T11:00:00+03:00
-        for line in file_lines {
-            if line == "" {
-                continue;
-            }
-            let timeslot = Timeslot {
-                start: line.split(",").collect::<Vec<&str>>()[0].to_owned(),
-                end: line.split(",").collect::<Vec<&str>>()[1].to_owned(),
-            };
-            existing_available_times.push(timeslot);
+    for line in file_lines {
+        if line == "" {
+            continue;
         }
+        let timeslot = Timeslot {
+            start: line.split(",").collect::<Vec<&str>>()[0].to_owned(),
+            end: line.split(",").collect::<Vec<&str>>()[1].to_owned(),
+        };
+        existing_available_times.push(timeslot);
     }
+
     return existing_available_times;
 }
 
