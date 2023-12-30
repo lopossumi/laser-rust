@@ -15,8 +15,8 @@ struct Config {
     days: u64
 }
 static CONFIG: Lazy<Config> = Lazy::new(|| Config {
-    telegram_bot_token: std::env::var("TELEGRAM_BOT_TOKEN").unwrap(),
-    telegram_chat_id: std::env::var("TELEGRAM_CHAT_ID").unwrap(),
+    telegram_bot_token: env!("TELEGRAM_BOT_TOKEN").to_string(),
+    telegram_chat_id: env!("TELEGRAM_CHAT_ID").to_string(),
     polling_interval: 600,
     days: 14
 });
