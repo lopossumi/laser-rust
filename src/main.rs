@@ -1,6 +1,4 @@
 use std::fs::OpenOptions;
-use std::thread;
-use std::time::Duration;
 use chrono::{Local, Days};
 use std::io::{prelude::*, SeekFrom};
 
@@ -11,25 +9,15 @@ use once_cell::sync::Lazy;
 struct Config {
     telegram_bot_token: String,
     telegram_chat_id: String,
-    polling_interval: u64,
     days: u64
 }
 static CONFIG: Lazy<Config> = Lazy::new(|| Config {
     telegram_bot_token: env!("TELEGRAM_BOT_TOKEN").to_string(),
     telegram_chat_id: env!("TELEGRAM_CHAT_ID").to_string(),
-    polling_interval: 600,
     days: 14
 });
 
 fn main() {
-    // Fetch data from API every 10 minutes
-    loop {
-        fetch_data();
-        thread::sleep(Duration::from_secs(CONFIG.polling_interval));
-    }
-}
-
-fn fetch_data() {
     println!("Fetching data...");
     let api_data = fetch_api_data();
 
